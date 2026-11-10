@@ -1,0 +1,10 @@
+﻿# Ignore local Python and generated dashboard artifacts.
+.venv/
+__pycache__/
+*.py[cod]
+*.html
+*.pdf
+*.png
+*.parquet
+*.metadata.json
+.DS_Store
