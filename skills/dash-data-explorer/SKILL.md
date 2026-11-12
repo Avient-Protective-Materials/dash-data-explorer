@@ -6,8 +6,9 @@ description: Build technically correct, responsive self-hosted Dash dashboards a
 # Dash Data Explorer
 
 Use this skill when building a self-hosted, open-source Dash application or a
-dense Plotly report. It covers technical rendering and interaction
-behavior, not data-source semantics or visual design.
+dense Plotly report. It covers technical rendering, interaction behavior, and
+the safe dashboard boundary for validated historian analyses; it does not
+replace process expertise or visual design guidance.
 
 ## Scope and dependencies
 
@@ -22,6 +23,34 @@ behavior, not data-source semantics or visual design.
 - Do not recommend `dash-design-kit`, Snapshot Engine, `dash-enterprise-auth`,
   `EnterpriseDash`, or Dash Enterprise job services unless the project
   explicitly confirms them.
+
+## Preserve the validated analysis contract
+
+- Resolve and document each approved tag's process meaning and signal polarity
+  before adding controls, labels, derived metrics, or state summaries. Never
+  infer that a value of `1` means active without confirmed process knowledge.
+- Measure and retain observed native historian cadence per tag. A requested
+  retrieval or display resolution is not evidence of stored sample frequency.
+- Preserve and visibly label native/actual, aggregate, interpolated, and
+  derived/corrected data in figures, tooltips, status text, and exports.
+- Keep raw and derived/corrected signals separate. Make baseline, offset, and
+  other correction assumptions inspectable rather than silently overwriting the
+  source signal.
+- Carry provenance through every data artifact and displayed result: source and
+  approved site, selected tags and coverage, missing tags, UTC query range,
+  retrieval mode/data kind, row count, and observed cadence.
+
+## Historian data model
+
+- Resample regular analog data only onto an explicit display grid, while
+  retaining native records and their retrieval mode in the cache.
+- Reconstruct sparse or discrete state history as state: combine event times
+  with the display grid, forward-fill the last known state, and document a
+  defined initial-state policy when earlier history is unavailable.
+- Derive active-state durations and counts only from the confirmed polarity and
+  state-reconstruction policy. Do not treat aggregate samples as event history.
+- Clearly distinguish missing/unknown initial state from an inactive state in
+  the rendered data and in aggregate calculations.
 
 ## Standalone application data adapters
 
@@ -57,26 +86,53 @@ behavior, not data-source semantics or visual design.
   accept caller-provided historian hosts, arbitrary SQL, credentials, or
   unrestricted query text.
 - Do not query a historian on every mouse move. Fetch only after a deliberate
-  range/filter refresh, then use local slicing and rendering for hover, pan,
-  and zoom interaction.
+  range navigation, refresh, or scheduled live poll, then use local slicing and
+  rendering for hover, pan, and zoom interaction.
 
-### Secure IIS credential provisioning
+### Cache native records incrementally
 
-- Keep IIS authentication in the host OS keyring or an approved server-side
-  secret manager. Never put passwords, authorization headers, or
-  credential-bearing URLs in Dash layout, browser stores, callbacks, source
-  control, logs, exports, or environment files.
-- On first startup, detect missing IIS credentials and present a setup-needed
-  state. The host administrator or operating-system user must complete an
-  interactive provisioning step outside browser state, then store the
-  credential through an approved keyring integration.
-- On Windows, use Windows Credential Manager. On Linux, use an approved Secret
-  Service/KWallet backend. For server deployment, the service account must own
-  the keyring/secret access; browser users must never supply durable historian
-  credentials to the app.
-- Keep credential provisioning separate from normal dashboard callbacks. A
-  moved or newly deployed app must require its own host/service-account secret
-  setup rather than copying a user's credentials with the source tree.
+- Store retrieved native records locally in Parquet, deduplicated by approved
+  tag and timestamp. Keep aggregate/interpolated retrievals separate; never
+  silently overwrite native history with them.
+- Cache completed historical windows for repeat browsing, with adjacent
+  provenance that identifies the site, retrieval mode, query interval, tag
+  coverage, observed cadence, and archive update time.
+- For live data, fetch only the new tail plus a short documented overlap to
+  capture late historian writes. Merge it into an append-only native archive,
+  deduplicate, and render only the requested rolling window.
+- Bound cache keys and file paths to approved profiles and server-controlled
+  values. Do not derive filesystem paths from untrusted browser input.
+
+### Secure credential provisioning
+
+- Keep historian credentials server-side. Never put passwords, authorization
+  headers, credential-bearing URLs, or secrets in Dash layout, browser stores,
+  callbacks, logs, source control, exports, caches, or environment files.
+- Persist credentials only in an approved secure OS secret store or encrypted
+  vault; reject plaintext keyring and file fallbacks. Keep a vault passphrase
+  only in memory for the running server session.
+- A credential modal may submit credentials only to a trusted local Dash host.
+  Remote use requires HTTPS and authenticated access. For server deployment,
+  the service account must own the secret-store access; browser users must not
+  supply durable historian credentials.
+- After an approved vault is unlocked, reuse its encrypted stored historian
+  credentials rather than requesting a password on every refresh.
+- Open the credential dialog only for vault-lock, missing-credential, or
+  historian `401`/`403` failures. Present unrelated retrieval and rendering
+  failures as data/application errors, not credential prompts.
+
+### TLS and corporate trust
+
+- Keep TLS certificate verification enabled; never use `verify=False` to work
+  around a trust failure.
+- Prefer the host-system certificate store. Install required enterprise root
+  and issuing CAs there; remember that WSL/Linux does not automatically inherit
+  Windows trust roots.
+- Support an explicit approved CA-bundle override only when necessary and only
+  from server-side configuration.
+- Verify the server's full certificate chain with OpenSSL and a real HTTPS
+  request before diagnosing authentication. A `401` response can demonstrate
+  that TLS succeeded.
 
 ## Choose the application architecture
 
@@ -89,6 +145,9 @@ behavior, not data-source semantics or visual design.
   selected range.
 - Keep raw source data immutable. Derive visible subsets, aggregates, images,
   and figures from explicit UI state.
+- Store, query, validate, cache, and slice historian timestamps in UTC. Convert
+  only at the presentation boundary to the operational timezone for axes,
+  hover labels, titles, status text, and exports.
 - Use `dcc.Store` only for small selection/filter state; do not place large raw
   datasets in browser component properties.
 
@@ -96,7 +155,9 @@ behavior, not data-source semantics or visual design.
 
 - Read `relayoutData` from any matched x-axis (`xaxis`, `xaxis2`, and so on),
   not only `xaxis`.
-- Normalize range state to timezone-aware timestamps before slicing data.
+- Convert browser zoom ranges to timezone-aware UTC timestamps before slicing,
+  caching, or historian retrieval. Use timezone-aware conversion so DST changes
+  are correct.
 - Preserve the selected range across stacked panels, derived calculations, and
   export callbacks.
 - Keep callbacks deterministic. Inputs are UI state; outputs are derived solely
@@ -108,6 +169,9 @@ behavior, not data-source semantics or visual design.
   rendering mode.
 - Use `dcc.Loading` or an equivalent visible loading state around expensive
   panels. Show an explicit empty/error state instead of an ambiguous blank plot.
+- Report dashboard-server health separately from historian-data health. Start a
+  live-refresh countdown only after a successful historian retrieval, and reset
+  or mark it stale when the historian becomes unavailable.
 
 ## Rendering policy
 
@@ -176,6 +240,9 @@ behavior, not data-source semantics or visual design.
   operational.
 - Include active range/filter context in the exported title, subtitle, or
   annotation when it affects interpretation.
+- Include the active provenance needed to interpret the export: site, tags,
+  operational timezone and displayed interval, retrieval mode/data kind, and
+  any native-versus-aggregate distinction.
 - Validate an actual zoomed PDF: verify PDF signature, expected page count,
   selected interval, legends, colorbars, and every required panel.
 - Treat successful `figure.to_image()` execution as insufficient; inspect the
@@ -183,12 +250,19 @@ behavior, not data-source semantics or visual design.
 
 ## Minimum technical validation
 
-1. Initial, wide-range, and zoomed views all render.
+1. Initial, wide-range, zoomed, and empty views all render with unambiguous
+   loading/error status.
 2. Every range-dependent callback uses the same normalized visible range.
 3. Datashader and `Scattergl` branches both execute and preserve series labels.
 4. Heatmap colorscales recompute from visible data and use an appropriate
    signed/magnitude scale policy.
 5. Legends and colorbars do not overlap and are present in exported output.
-6. The exported PDF/image uses the same active selection as the browser figure.
-7. Empty, loading, and error states are visible and unambiguous.
+6. A real zoomed PDF/image uses the same active selection as the browser figure
+   and contains all panels, legends, colorbars, and data-kind provenance.
+7. Native cadence/provenance, state polarity, initial-state behavior, and any
+   derived-signal assumptions remain visible and correctly applied.
+8. Credential, vault-lock, TLS, historian, and successful live-refresh states
+   are distinct; only credential-specific failures open the credential dialog.
+9. Live tail refreshes deduplicate overlapping native records and do not alter
+   already archived native history with aggregate or interpolated values.
 
